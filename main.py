@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QStackedWidget, QLineEdit, QMessageBox, QListWidgetItem,
                            QFrame, QScrollArea, QSizePolicy, QSpacerItem, QMenu,
                            QButtonGroup, QRadioButton, QToolButton, QDialog, QDialogButtonBox,
-                           QInputDialog, QCheckBox, QGridLayout)
+                           QInputDialog, QCheckBox, QGridLayout, QTabWidget)
 from PyQt6.QtCore import Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QFont, QIcon, QCursor, QAction
 
@@ -220,29 +220,32 @@ class ExpenseCalculator(QMainWindow):
             QLineEdit.EchoMode.Normal, current_title
         )
         
-        if ok and new_title.strip():
-            # 更新计算数据
-            if calc_id in self.calculations:
-                self.calculations[calc_id]["标题"] = new_title.strip()
+        # 如果用户取消或输入为空，直接返回
+        if not ok or not new_title.strip():
+            return
+            
+        # 更新计算数据
+        if calc_id in self.calculations:
+            self.calculations[calc_id]["标题"] = new_title.strip()
+            
+            # 保存到文件
+            file_name = f"{calc_id}.json"
+            file_path = os.path.join(self.history_dir, file_name)
+            
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(self.calculations[calc_id], f, ensure_ascii=False, indent=2)
                 
-                # 保存到文件
-                file_name = f"{calc_id}.json"
-                file_path = os.path.join(self.history_dir, file_name)
+                # 更新历史记录列表
+                self.update_history_list()
                 
-                try:
-                    with open(file_path, 'w', encoding='utf-8') as f:
-                        json.dump(self.calculations[calc_id], f, ensure_ascii=False, indent=2)
-                    
-                    # 更新历史记录列表
-                    self.update_history_list()
-                    
-                    # 如果当前正在查看的是被重命名的记录，则更新标题
-                    if calc_id == self.current_calculation_id:
-                        self.setWindowTitle(f"多事件计算器 - {new_title}")
-                    
-                    QMessageBox.information(self, "重命名成功", "记录已成功重命名。")
-                except Exception as e:
-                    QMessageBox.warning(self, "重命名失败", f"重命名记录时出错: {str(e)}")
+                # 如果当前正在查看的是被重命名的记录，则更新标题
+                if calc_id == self.current_calculation_id:
+                    self.setWindowTitle(f"多事件计算器 - {new_title}")
+                
+                QMessageBox.information(self, "重命名成功", "记录已成功重命名。")
+            except Exception as e:
+                QMessageBox.warning(self, "重命名失败", f"重命名记录时出错: {str(e)}")
     
     def create_new_calculation(self):
         """创建新的计算"""
@@ -262,8 +265,12 @@ class ExpenseCalculator(QMainWindow):
                 QLineEdit.EchoMode.Normal, default_title
             )
             
-            # 如果用户取消或输入为空，使用默认标题
-            if not ok or not new_title.strip():
+            # 如果用户取消，直接返回，不创建新计算
+            if not ok:
+                return
+            
+            # 如果输入为空，使用默认标题
+            if not new_title.strip():
                 record_title = default_title
             else:
                 record_title = new_title.strip()
@@ -374,25 +381,45 @@ class ExpenseCalculator(QMainWindow):
         layout = QVBoxLayout()
         dialog.setLayout(layout)
         
-        # 添加提示标签
-        label = QLabel("请输入人员姓名:")
-        layout.addWidget(label)
+        # 创建选项卡
+        tabs = QTabWidget()
         
-        # 添加输入框
+        # 创建单人添加选项卡
+        single_person_tab = QWidget()
+        single_layout = QVBoxLayout(single_person_tab)
+        
+        single_label = QLabel("输入人员姓名:")
+        single_layout.addWidget(single_label)
+        
         name_input = QLineEdit()
         name_input.setPlaceholderText("输入姓名")
-        layout.addWidget(name_input)
+        single_layout.addWidget(name_input)
         
-        # 添加模板选择提示
-        template_label = QLabel("或从模板中选择:")
-        layout.addWidget(template_label)
+        single_layout.addStretch()
         
-        # 添加模板列表
+        # 创建模板选项卡
+        template_tab = QWidget()
+        template_layout = QVBoxLayout(template_tab)
+        
+        template_label = QLabel("选择要应用的模板:")
+        template_layout.addWidget(template_label)
+        
         template_list = QListWidget()
         if hasattr(self, 'templates') and self.templates:
-            for template in self.templates:
-                template_list.addItem(template)
-        layout.addWidget(template_list)
+            for template_name, template_data in self.templates.items():
+                person_count = template_data.get("人数", 0)
+                item_text = f"{template_name} ({person_count}人)"
+                item = QListWidgetItem(item_text)
+                item.setData(Qt.ItemDataRole.UserRole, template_name)
+                template_list.addItem(item)
+        template_layout.addWidget(template_list)
+        
+        # 添加选项卡到选项卡控件
+        tabs.addTab(single_person_tab, "添加单人")
+        tabs.addTab(template_tab, "使用模板")
+        
+        # 添加选项卡控件到主布局
+        layout.addWidget(tabs)
         
         # 添加按钮区域
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -406,19 +433,21 @@ class ExpenseCalculator(QMainWindow):
         result = dialog.exec()
         
         if result == QDialog.DialogCode.Accepted:
-            # 获取输入的名称或选中的模板
-            name = name_input.text().strip()
-            selected_items = template_list.selectedItems()
+            current_tab = tabs.currentIndex()
             
-            if selected_items and not name:
-                # 使用选中的模板
-                name = selected_items[0].text()
-                
-            # 添加人员
-            if name:
-                self.add_person_to_calculation(name)
-            else:
-                QMessageBox.warning(self, "错误", "请输入人员姓名或选择模板！")
+            if current_tab == 0:  # 单人添加选项卡
+                name = name_input.text().strip()
+                if name:
+                    self.add_person_to_calculation(name)
+                else:
+                    QMessageBox.warning(self, "错误", "请输入人员姓名！")
+            else:  # 模板选项卡
+                selected_items = template_list.selectedItems()
+                if selected_items:
+                    template_name = selected_items[0].data(Qt.ItemDataRole.UserRole)
+                    self.apply_template(template_name)
+                else:
+                    QMessageBox.warning(self, "错误", "请选择一个模板！")
     
     def start_people_setup(self, mode_id):
         """根据选择的模式开始设置人员"""
@@ -619,8 +648,8 @@ class ExpenseCalculator(QMainWindow):
         
         # 初始化该人员的数据
         if name not in self.people_data:
-            self.people_data[name] = {"衣": 0, "食": 0, "住": 0, "行": 0, "总额": 0}
-            
+            self.people_data[name] = {} # 初始化为空字典
+        
         # 保存最新数据
         self.calculations[self.current_calculation_id]["数据"] = self.people_data
         
@@ -649,8 +678,8 @@ class ExpenseCalculator(QMainWindow):
         
         # 初始化人员数据
         if name not in self.people_data:
-            self.people_data[name] = {"衣": 0, "食": 0, "住": 0, "行": 0, "总额": 0}
-            
+            self.people_data[name] = {} # 初始化为空字典
+        
         # 直接创建人员计算页面
         self.setup_people_calculation()
     
@@ -1011,61 +1040,6 @@ class ExpenseCalculator(QMainWindow):
             }
         """)
 
-    def show_add_person_dialog(self):
-        """显示添加人员对话框"""
-        dialog = QDialog(self)
-        dialog.setWindowTitle("添加人员")
-        dialog.setMinimumWidth(300)
-        
-        layout = QVBoxLayout()
-        dialog.setLayout(layout)
-        
-        # 添加提示标签
-        label = QLabel("请输入人员姓名:")
-        layout.addWidget(label)
-        
-        # 添加输入框
-        name_input = QLineEdit()
-        name_input.setPlaceholderText("输入姓名")
-        layout.addWidget(name_input)
-        
-        # 添加模板选择提示
-        template_label = QLabel("或从模板中选择:")
-        layout.addWidget(template_label)
-        
-        # 添加模板列表
-        template_list = QListWidget()
-        if hasattr(self, 'templates') and self.templates:
-            for template in self.templates:
-                template_list.addItem(template)
-        layout.addWidget(template_list)
-        
-        # 添加按钮区域
-        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        layout.addWidget(button_box)
-        
-        # 连接信号
-        button_box.accepted.connect(dialog.accept)
-        button_box.rejected.connect(dialog.reject)
-        
-        # 显示对话框
-        result = dialog.exec()
-        
-        if result == QDialog.DialogCode.Accepted:
-            # 获取输入的名称或选中的模板
-            name = name_input.text().strip()
-            selected_items = template_list.selectedItems()
-            
-            if selected_items and not name:
-                # 使用选中的模板
-                name = selected_items[0].text()
-                
-            # 添加人员
-            if name:
-                self.add_person_to_calculation(name)
-            else:
-                QMessageBox.warning(self, "错误", "请输入人员姓名或选择模板！")
-    
     def delete_person(self, person_name):
         """从当前计算中删除人员"""
         if not self.current_calculation_id:
@@ -1469,8 +1443,20 @@ class ExpenseCalculator(QMainWindow):
         # 判断是否是在修改历史记录（而不是新建的计算）
         is_existing_record = os.path.exists(file_path)
         
-        # 如果是修改现有历史记录，弹出确认对话框
-        if is_existing_record:
+        # 判断是否是刚刚创建的新记录
+        is_new_record = False
+        if self.current_calculation_id in self.calculations:
+            created_time_str = self.calculations[self.current_calculation_id].get("创建时间", "")
+            if created_time_str:
+                try:
+                    created_time = datetime.strptime(created_time_str, "%Y-%m-%d %H:%M:%S")
+                    # 如果创建时间在最近两分钟内，认为是新记录
+                    is_new_record = (datetime.now() - created_time).total_seconds() < 120
+                except Exception as e:
+                    print(f"解析创建时间时出错: {e}")
+        
+        # 如果是修改现有历史记录(且不是新记录)，弹出确认对话框
+        if is_existing_record and not is_new_record:
             reply = QMessageBox.question(
                 self, "确认保存", 
                 "您正在修改历史记录。确定要保存更改吗？",
@@ -1513,8 +1499,9 @@ class ExpenseCalculator(QMainWindow):
             # 更新历史记录列表
             self.update_history_list()
             
-            # 显示保存成功提示
-            QMessageBox.information(self, "保存成功", "计算数据已成功保存。")
+            # 显示保存成功提示（对于新记录或首次创建的记录，不显示提示）
+            if not is_new_record:
+                QMessageBox.information(self, "保存成功", "计算数据已成功保存。")
                 
         except Exception as e:
             QMessageBox.warning(self, "保存失败", f"无法保存计算数据: {str(e)}")
@@ -1887,44 +1874,47 @@ class ExpenseCalculator(QMainWindow):
         template_name, ok = QInputDialog.getText(
             self, "保存模板", "请输入模板名称:", QLineEdit.EchoMode.Normal, "")
         
-        if ok and template_name:
-            # 检查名称合法性和是否已存在
-            if not self.is_valid_filename(template_name):
-                QMessageBox.warning(self, "错误", "模板名称包含非法字符！")
+        # 如果用户取消或没有输入名称，直接返回
+        if not ok or not template_name.strip():
+            return
+            
+        # 检查名称合法性和是否已存在
+        if not self.is_valid_filename(template_name):
+            QMessageBox.warning(self, "错误", "模板名称包含非法字符！")
+            return
+            
+        # 生成文件名
+        file_name = f"{template_name}.json"
+        file_path = os.path.join(self.templates_dir, file_name)
+        
+        # 检查是否已存在
+        if os.path.exists(file_path):
+            reply = QMessageBox.question(
+                self, "确认覆盖", 
+                f"模板 \"{template_name}\" 已存在！是否覆盖？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply != QMessageBox.StandardButton.Yes:
                 return
-                
-            # 生成文件名
-            file_name = f"{template_name}.json"
-            file_path = os.path.join(self.templates_dir, file_name)
+        
+        # 准备模板数据
+        template_data = {
+            "人员": self.calculations[self.current_calculation_id]["人员"],
+            "人数": len(self.calculations[self.current_calculation_id]["人员"])
+        }
+        
+        # 保存到文件
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(template_data, f, ensure_ascii=False, indent=2)
             
-            # 检查是否已存在
-            if os.path.exists(file_path):
-                reply = QMessageBox.question(
-                    self, "确认覆盖", 
-                    f"模板 \"{template_name}\" 已存在！是否覆盖？",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                )
-                
-                if reply != QMessageBox.StandardButton.Yes:
-                    return
+            # 更新模板字典
+            self.templates[template_name] = template_data
             
-            # 准备模板数据
-            template_data = {
-                "人员": self.calculations[self.current_calculation_id]["人员"],
-                "人数": len(self.calculations[self.current_calculation_id]["人员"])
-            }
-            
-            # 保存到文件
-            try:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    json.dump(template_data, f, ensure_ascii=False, indent=2)
-                
-                # 更新模板字典
-                self.templates[template_name] = template_data
-                
-                QMessageBox.information(self, "成功", f"模板 \"{template_name}\" 已保存！")
-            except Exception as e:
-                QMessageBox.warning(self, "保存失败", f"无法保存模板: {str(e)}")
+            QMessageBox.information(self, "成功", f"模板 \"{template_name}\" 已保存！")
+        except Exception as e:
+            QMessageBox.warning(self, "保存失败", f"无法保存模板: {str(e)}")
     
     def load_from_template(self):
         """从模板加载人员设置"""
@@ -1969,11 +1959,19 @@ class ExpenseCalculator(QMainWindow):
         dialog_layout.addLayout(button_layout)
         
         # 显示对话框
-        if template_dialog.exec() == QDialog.DialogCode.Accepted:
-            selected_items = template_list.selectedItems()
-            if selected_items:
-                template_name = selected_items[0].data(Qt.ItemDataRole.UserRole)
-                self.apply_template(template_name)
+        result = template_dialog.exec()
+        
+        # 如果用户取消，直接返回
+        if result != QDialog.DialogCode.Accepted:
+            return
+        
+        # 用户确认选择
+        selected_items = template_list.selectedItems()
+        if selected_items:
+            template_name = selected_items[0].data(Qt.ItemDataRole.UserRole)
+            self.apply_template(template_name)
+        else:
+            QMessageBox.information(self, "提示", "请先选择一个模板")
     
     def delete_template(self, template_list):
         """删除选中的模板"""
@@ -2057,6 +2055,9 @@ class ExpenseCalculator(QMainWindow):
         # 更新内存中的 people_data (以防万一)
         self.people_data = current_data
 
+        # 保存当前计算
+        self.save_current_calculation()
+
         # 刷新主计算页面的人员列表和总览
         self.load_people_list() 
         self.update_all_totals()
@@ -2069,24 +2070,113 @@ class ExpenseCalculator(QMainWindow):
              QMessageBox.information(self, "模板已应用", f"成功添加 {added_count} 名人员。")
         elif duplicates:
             QMessageBox.information(self, "提示", f"模板中的所有人员已存在于当前计算中。")
-        
-        # # 移除旧的逻辑分支
-        # # ...
     
     def add_from_template(self):
         """从模板添加人员"""
         # 如果没有当前计算，先创建
         if not self.current_calculation_id:
-            self.current_calculation_id = datetime.now().strftime("%Y%m%d%H%M%S")
-            self.calculations[self.current_calculation_id] = {
-                "创建时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "人数": 0,
+            # 创建新计算
+            new_calc_id = datetime.now().strftime("%Y%m%d%H%M%S")
+            calc_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            default_title = f"计算 {calc_date}"
+            
+            # 弹出对话框让用户命名
+            new_title, ok = QInputDialog.getText(
+                self, "新建计算", "请输入记录名称:", 
+                QLineEdit.EchoMode.Normal, default_title
+            )
+            
+            # 如果用户取消，直接返回
+            if not ok:
+                return
+            
+            # 如果输入为空，使用默认标题
+            record_title = new_title.strip() if new_title.strip() else default_title
+            
+            # 创建新计算结构
+            self.calculations[new_calc_id] = {
+                "日期": calc_date,
+                "创建时间": calc_date,
+                "标题": record_title,
                 "人员": [],
-                "数据": {}
+                "人数": 0,
+                "数据": {},
+                "开奖设置": {"中奖号码": None, "赔率": None},
+                "总览": {},
+                "用户结果": {}
             }
             
-        # 调用加载模板功能
-        self.load_from_template()
+            # 设置当前计算ID
+            self.current_calculation_id = new_calc_id
+            
+            # 保存新记录
+            self.save_current_calculation()
+            
+            # 更新历史记录列表
+            self.update_history_list()
+            
+            # 创建人员计算页面
+            self.setup_people_calculation()
+            
+            # 切换到人员计算页面
+            calc_page_index = 1
+            if self.content_stack.count() > calc_page_index:
+                self.content_stack.setCurrentIndex(calc_page_index)
+            
+        # 检查是否有模板
+        if not self.templates:
+            QMessageBox.information(self, "提示", "没有可用的模板！")
+            return
+        
+        # 创建模板选择对话框
+        template_dialog = QDialog(self)
+        template_dialog.setWindowTitle("选择模板")
+        template_dialog.resize(300, 400)
+        
+        dialog_layout = QVBoxLayout(template_dialog)
+        
+        template_list = QListWidget()
+        template_list.setAlternatingRowColors(True)
+        
+        # 添加模板项
+        for name, data in self.templates.items():
+            item_text = f"{name} ({data.get('人数', 0)}人)"
+            item = QListWidgetItem(item_text)
+            item.setData(Qt.ItemDataRole.UserRole, name)
+            template_list.addItem(item)
+        
+        dialog_layout.addWidget(template_list)
+        
+        # 添加按钮
+        button_layout = QHBoxLayout()
+        
+        delete_button = QPushButton("删除模板")
+        delete_button.clicked.connect(lambda: self.delete_template(template_list))
+        
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        button_box.accepted.connect(template_dialog.accept)
+        button_box.rejected.connect(template_dialog.reject)
+        
+        button_layout.addWidget(delete_button)
+        button_layout.addStretch()
+        button_layout.addWidget(button_box)
+        
+        dialog_layout.addLayout(button_layout)
+        
+        # 显示对话框
+        result = template_dialog.exec()
+        
+        # 如果用户取消模板选择，直接返回
+        if result != QDialog.DialogCode.Accepted:
+            return
+        
+        # 用户选择了模板
+        selected_items = template_list.selectedItems()
+        if selected_items:
+            template_name = selected_items[0].data(Qt.ItemDataRole.UserRole)
+            self.apply_template(template_name)
+        else:
+            QMessageBox.information(self, "提示", "请先选择一个模板")
     
     def is_valid_filename(self, filename):
         """检查文件名是否合法"""
